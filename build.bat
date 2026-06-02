@@ -11,14 +11,17 @@ REM Clean previous build
 if exist dist\VoiceChanger rmdir /s /q dist\VoiceChanger
 if exist build rmdir /s /q build
 
-REM Build
-pyinstaller voice_changer.spec
+REM Build (use python -m to avoid PATH issues with Scripts directory)
+python -m PyInstaller voice_changer.spec
 
 if errorlevel 1 (
     echo BUILD FAILED
     pause
     exit /b 1
 )
+
+REM Wait for PyInstaller to release file handles before zipping
+timeout /t 3 /nobreak > nul
 
 REM Zip the output folder
 echo Zipping...

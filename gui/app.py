@@ -1,8 +1,11 @@
+import threading
 import tkinter as tk
 from tkinter import ttk, simpledialog, messagebox
+import numpy as np
+import sounddevice as sd
 
 from audio.devices import get_input_devices, get_output_devices
-from audio.engine import AudioEngine
+from audio.engine import AudioEngine, BLOCK_SIZE_OPTIONS, DEFAULT_BLOCK_SIZE
 from audio.processor import AudioProcessor
 from presets.space_marine import SpaceMarinePreset
 from utils.config import Config
@@ -38,6 +41,9 @@ class App(tk.Tk):
         self._current_preset_name: str = ""
         self._current_params: dict = {}
         self._slider_widgets: list[ParamSlider] = []
+
+        # Recording state
+        self._playback_thread: threading.Thread | None = None
 
         # Build UI
         self._build_ui()
@@ -86,6 +92,18 @@ class App(tk.Tk):
 
         self._monitor_sel = DeviceSelector(dev_frame, "Monitor (ears):", outputs)
         self._monitor_sel.pack(fill="x", padx=6, pady=2)
+
+        # Quality / latency selector (block size). Larger = cleaner but more delay.
+        q_row = tk.Frame(dev_frame, bg=theme.BG_PANEL)
+        q_row.pack(fill="x", padx=6, pady=2)
+        tk.Label(q_row, text="Quality:", bg=theme.BG_PANEL, fg=theme.FG_DIM,
+                 font=theme.FONT_LABEL, width=14, anchor="w").pack(side="left")
+        self._quality_var = tk.StringVar()
+        self._quality_combo = ttk.Combobox(q_row, textvariable=self._quality_var,
+                                            state="readonly", font=theme.FONT_MAIN,
+                                            width=24, values=list(BLOCK_SIZE_OPTIONS.keys()))
+        self._quality_combo.pack(side="left", padx=(2, 0))
+        self._quality_combo.bind("<<ComboboxSelected>>", lambda e: self._on_quality_changed())
 
         refresh_btn = tk.Button(dev_frame, text="Refresh Devices",
                                 command=self._refresh_devices,
@@ -141,13 +159,22 @@ class App(tk.Tk):
             bg=theme.MONITOR_OFF, fg=theme.FG, font=theme.FONT_BTN,
             relief="flat", bd=0, cursor="hand2",
         )
-        self._monitor_btn.pack(side="left", padx=(0, 12))
+        self._monitor_btn.pack(side="left", padx=(0, 4))
+
+        self._rec_btn = tk.Button(
+            ctrl_frame, text="REC", width=6, height=theme.BTN_H,
+            command=self._toggle_recording,
+            bg="#5a1a1a", fg=theme.FG, font=theme.FONT_BTN,
+            relief="flat", bd=0, cursor="hand2",
+        )
+        self._rec_btn.pack(side="left", padx=(0, 12))
 
         meter_col = tk.Frame(ctrl_frame, bg=theme.BG)
         meter_col.pack(side="left", fill="x", expand=True)
         tk.Label(meter_col, text="Level", bg=theme.BG, fg=theme.FG_DIM,
                  font=theme.FONT_LABEL).pack(anchor="w")
-        self._meter = LevelMeter(meter_col, width=220, height=14)
+        self._meter = LevelMeter(meter_col, width=240, height=14,
+                                 on_clip_click=self._engine.reset_clip)
         self._meter.pack(anchor="w")
 
         # ---- Parameter sliders ----
@@ -297,6 +324,68 @@ class App(tk.Tk):
         except RuntimeError as e:
             self._set_status(f"Error: {e}")
 
+    def _on_quality_changed(self):
+        name = self._quality_var.get()
+        block = BLOCK_SIZE_OPTIONS.get(name)
+        if not block:
+            return
+        try:
+            self._engine.set_block_size(block)
+            ms = self._engine.latency_ms
+            self._latency_var.set(f"~{ms}ms latency")
+            self._set_status(f"Quality: {name}")
+        except Exception as e:
+            self._set_status(f"Error: {e}")
+
+    def _toggle_recording(self):
+        if self._engine.is_recording:
+            # Stop recording, save WAVs for analysis, then play back
+            audio = self._engine.stop_recording()
+            self._rec_btn.config(bg="#5a1a1a", text="REC")
+            if audio is not None and len(audio) > 0:
+                try:
+                    paths = self._engine.save_recording_wavs()
+                    if paths:
+                        self._set_status(f"Saved {paths[1].split(chr(92))[-1]} + raw  |  Playing back...")
+                except Exception as e:
+                    self._set_status(f"Save failed: {e}  |  Playing back...")
+                self._rec_btn.config(state="disabled")
+                self._start_playback(audio)
+            else:
+                self._set_status("Nothing recorded.")
+        else:
+            # Start recording
+            self._engine.start_recording()
+            self._rec_btn.config(bg="#cc2222", text="■ REC")
+            self._set_status("Recording...")
+            self._update_rec_timer()
+
+    def _update_rec_timer(self):
+        if self._engine.is_recording:
+            secs = self._engine.recording_seconds
+            mins = int(secs // 60)
+            s = int(secs % 60)
+            self._rec_btn.config(text=f"■ {mins}:{s:02d}")
+            self.after(500, self._update_rec_timer)
+
+    def _start_playback(self, audio: np.ndarray):
+        monitor_idx = self._monitor_sel.get_selected_index()
+        sr = self._engine._sample_rate
+
+        def _play():
+            try:
+                sd.play(audio[:, 0], samplerate=sr, device=monitor_idx, blocking=True)
+            except Exception:
+                pass
+            self.after(0, self._on_playback_done)
+
+        self._playback_thread = threading.Thread(target=_play, daemon=True)
+        self._playback_thread.start()
+
+    def _on_playback_done(self):
+        self._rec_btn.config(state="normal", bg="#5a1a1a", text="REC")
+        self._set_status("Ready")
+
     # ------------------------------------------------------------------
     # Device refresh
     # ------------------------------------------------------------------
@@ -342,6 +431,13 @@ class App(tk.Tk):
         if cfg.get("monitor_output_device"):
             self._monitor_sel.set_by_name(cfg["monitor_output_device"])
 
+        # Quality / block size — set combo display and apply to engine before start
+        saved_block = cfg.get("block_size", DEFAULT_BLOCK_SIZE)
+        name = next((n for n, b in BLOCK_SIZE_OPTIONS.items() if b == saved_block),
+                    next(n for n, b in BLOCK_SIZE_OPTIONS.items() if b == DEFAULT_BLOCK_SIZE))
+        self._quality_var.set(name)
+        self._engine.BLOCK_SIZE = BLOCK_SIZE_OPTIONS[name]
+
         preset_name = cfg.get("preset")
         all_presets = list(self._builtin_map.keys()) + list(self._custom_map.keys())
         if preset_name and preset_name in all_presets:
@@ -358,6 +454,7 @@ class App(tk.Tk):
             "main_output_device": self._main_out_sel.get_selected_name(),
             "monitor_output_device": self._monitor_sel.get_selected_name(),
             "preset": self._current_preset_name,
+            "block_size": self._engine.BLOCK_SIZE,
         })
 
     # ------------------------------------------------------------------
@@ -367,17 +464,23 @@ class App(tk.Tk):
     def _poll_meter(self):
         try:
             rms = self._engine.rms_queue[-1]
-            self._meter.set_rms(rms)
+            peak = self._engine.read_peak()
+            clipped = self._engine.clipped
+            self._meter.update_levels(rms, peak, clipped)
         except (IndexError, Exception):
             pass
 
-        # Update diagnostic readout: processing time and xrun count
+        # Update diagnostic readout: DSP time, mode, and total glitch count.
+        # The full per-second breakdown is written to voice_changer_diag.log.
         try:
+            d = self._engine.get_diagnostics()
             proc_ms = self._engine.last_process_ms
-            xruns = self._engine.xrun_count
-            ms = self._engine.latency_ms
-            xrun_str = f"  xruns:{xruns}" if xruns else ""
-            self._latency_var.set(f"dsp:{proc_ms:.1f}ms  ~{ms}ms latency{xrun_str}")
+            glitches = d["total_glitches"]
+            mode = "FD" if d["mode"] == "full-duplex" else "SEP"
+            self._latency_var.set(
+                f"{mode} dsp:{proc_ms:.0f}/{d['dsp_ms_max']:.0f}ms "
+                f"budget:{d['block_ms']:.0f}ms  glitches:{glitches}"
+            )
         except Exception:
             pass
 

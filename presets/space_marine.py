@@ -1,4 +1,3 @@
-import numpy as np
 from pedalboard import (
     Pedalboard,
     HighpassFilter,
@@ -8,6 +7,7 @@ from pedalboard import (
     Compressor,
     Reverb,
     Gain,
+    Limiter,
 )
 from .base import PresetBase, ParamSpec
 
@@ -28,6 +28,7 @@ class SpaceMarinePreset(PresetBase):
             "reverb_room_size":         0.15,
             "reverb_wet_level":         0.20,
             "output_gain_db":           0.0,
+            "limiter_threshold_db":     -2.0,
         }
 
     @property
@@ -42,6 +43,7 @@ class SpaceMarinePreset(PresetBase):
             "reverb_room_size":        ParamSpec("Reverb Room",      0.0,  1.0, 0.01,  "",   ".2f"),
             "reverb_wet_level":        ParamSpec("Reverb Wet",       0.0,  1.0, 0.01,  "",   ".2f"),
             "output_gain_db":          ParamSpec("Output Gain",    -12.0, 12.0,  0.5,  "dB",  ".1f"),
+            "limiter_threshold_db":    ParamSpec("Limiter",        -12.0,  0.0,  0.5,  "dB",  ".1f"),
         }
 
     def build_chain(self, params: dict) -> Pedalboard:
@@ -70,4 +72,7 @@ class SpaceMarinePreset(PresetBase):
             ),
             # Master output trim
             Gain(gain_db=p["output_gain_db"]),
+            # Brickwall limiter — prevents clipping caused by PitchShift + Distortion
+            # gain interaction on loud transients. Always the last effect in the chain.
+            Limiter(threshold_db=p["limiter_threshold_db"], release_ms=50.0),
         ])

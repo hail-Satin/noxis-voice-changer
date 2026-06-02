@@ -62,42 +62,76 @@ class LevelMeter(tk.Canvas):
 
     SEGMENTS = 24
     SEG_PAD = 1
+    CLIP_W = 16  # width of the dedicated CLIP indicator block on the right
 
-    def __init__(self, parent, width=200, height=16, **kwargs):
+    @staticmethod
+    def _to_norm(linear: float) -> float:
+        """Linear amplitude → normalized 0..1 over a -60..0 dBFS range."""
+        db = 20 * math.log10(max(linear, 1e-9))
+        return max(0.0, min(1.0, (db + 60) / 60))
+
+    def __init__(self, parent, width=200, height=16, on_clip_click=None, **kwargs):
         super().__init__(parent, width=width, height=height,
                          bg=theme.BG_WIDGET, highlightthickness=0, **kwargs)
         self._width = width
         self._height = height
-        self._level = 0.0  # 0.0 to 1.0 (linear amplitude)
-        self._draw(0)
+        self._bar_w = width - self.CLIP_W - 2  # space for the segment bar
+        self._level = 0.0    # rms, normalized
+        self._peak = 0.0     # peak-hold, normalized
+        self._clipped = False
+        self._on_clip_click = on_clip_click
+        # Clicking the meter clears a latched clip
+        self.bind("<Button-1>", self._handle_click)
+        self._draw()
 
-    def set_rms(self, rms: float):
-        """Accept RMS value (linear). Converts to dBFS internally."""
-        db = 20 * math.log10(max(rms, 1e-9))
-        # Map -60dBFS..0dBFS → 0..1
-        normalized = max(0.0, min(1.0, (db + 60) / 60))
-        if abs(normalized - self._level) > 0.005:
-            self._level = normalized
-            self._draw(normalized)
+    def update_levels(self, rms: float, peak: float, clipped: bool):
+        """rms and peak are linear amplitudes; clipped is the latched flag."""
+        new_level = self._to_norm(rms)
+        new_peak = self._to_norm(peak)
+        if (abs(new_level - self._level) > 0.005
+                or abs(new_peak - self._peak) > 0.005
+                or clipped != self._clipped):
+            self._level = new_level
+            self._peak = new_peak
+            self._clipped = clipped
+            self._draw()
 
-    def _draw(self, level: float):
+    def _handle_click(self, event):
+        # Click on the CLIP block clears it
+        if event.x >= self._bar_w + 2 and self._on_clip_click:
+            self._on_clip_click()
+
+    def _draw(self):
         self.delete("all")
-        seg_w = (self._width - (self.SEGMENTS - 1) * self.SEG_PAD) / self.SEGMENTS
-        active = int(level * self.SEGMENTS)
+        seg_w = (self._bar_w - (self.SEGMENTS - 1) * self.SEG_PAD) / self.SEGMENTS
+        active = int(self._level * self.SEGMENTS)
+        peak_seg = int(self._peak * self.SEGMENTS)
         for i in range(self.SEGMENTS):
             x0 = i * (seg_w + self.SEG_PAD)
             x1 = x0 + seg_w
+            frac = i / self.SEGMENTS
             if i < active:
-                frac = i / self.SEGMENTS
                 if frac < 0.6:
                     color = theme.LEVEL_LOW
                 elif frac < 0.85:
                     color = theme.LEVEL_MID
                 else:
                     color = theme.LEVEL_HIGH
+            elif i == peak_seg and peak_seg > 0:
+                # Peak-hold marker — brighter version of the zone colour
+                color = "#dddddd"
             else:
                 color = "#333333"
             self.create_rectangle(x0, 1, x1, self._height - 1, fill=color, outline="")
+
+        # CLIP indicator block on the right
+        cx0 = self._bar_w + 2
+        clip_color = "#ff2020" if self._clipped else "#3a2020"
+        self.create_rectangle(cx0, 1, self._width, self._height - 1,
+                              fill=clip_color, outline="")
+        self.create_text((cx0 + self._width) / 2, self._height / 2,
+                         text="CLIP", fill="#ffffff" if self._clipped else "#775555",
+                         font=("Segoe UI", 6, "bold"))
 
 
 class ParamSlider(tk.Frame):

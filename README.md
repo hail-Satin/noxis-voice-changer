@@ -50,8 +50,23 @@ python main.py
 |---|---|
 | **ENABLE** | Starts routing processed audio to the Output (Discord) device |
 | **MONITOR** | Lets you hear your own processed voice through your headphones |
+| **REC** | Records your processed voice; click again to play it back (and saves WAVs next to the app) |
 
 > **Tip:** Use Monitor mode first to check the effect sounds right before enabling it in Discord.
+
+### Quality / Latency
+
+The **Quality** dropdown trades audio cleanliness against delay. The pitch-shifter
+produces cleaner audio when given larger chunks to work with, but larger chunks add
+latency between you speaking and your friends hearing it:
+
+| Setting | Latency (round-trip) | Use when |
+|---|---|---|
+| Low latency (4096) | ~190ms | You want responsiveness and can tolerate slight crackle |
+| Balanced (8192) | ~370ms | Middle ground |
+| Best quality (16384) | ~740ms | Cleanest voice; fine for casual chat where a little delay is OK |
+
+Default is **Best quality**. Lower it if the conversation delay feels too long.
 
 ### Presets
 
