@@ -370,6 +370,17 @@ class App(tk.Tk):
             self._meter.set_rms(rms)
         except (IndexError, Exception):
             pass
+
+        # Update diagnostic readout: processing time and xrun count
+        try:
+            proc_ms = self._engine.last_process_ms
+            xruns = self._engine.xrun_count
+            ms = self._engine.latency_ms
+            xrun_str = f"  xruns:{xruns}" if xruns else ""
+            self._latency_var.set(f"dsp:{proc_ms:.1f}ms  ~{ms}ms latency{xrun_str}")
+        except Exception:
+            pass
+
         self.after(self.METER_INTERVAL_MS, self._poll_meter)
 
     # ------------------------------------------------------------------
