@@ -1,0 +1,16 @@
+{
+  "TestVoice": {
+    "base_preset": "Space Marine (WH40K)",
+    "params": {
+      "pitch_semitones": -3.0,
+      "hp_cutoff_hz": 200.0,
+      "lp_cutoff_hz": 4000.0,
+      "distortion_drive_db": 8.0,
+      "compressor_threshold_db": -18.0,
+      "compressor_ratio": 6.0,
+      "reverb_room_size": 0.08,
+      "reverb_wet_level": 0.05,
+      "output_gain_db": 0.0
+    }
+  }
+}
